@@ -202,7 +202,7 @@ async def monitor_markets() -> None:
     global SYMBOLS
     try:
         if not SYMBOLS:
-            SYMBOLS = await _fetch_top_usdt_pairs(exchange, limit=50)
+            SYMBOLS = await _fetch_top_usdt_pairs(exchange, limit=200)
             
         while True:
             for symbol in SYMBOLS:
