@@ -217,7 +217,8 @@ async def monitor_markets() -> None:
             await manager.broadcast({"type": "status", "status": market_status})
             await asyncio.sleep(POLL_SECONDS)
     except Exception as exc:
-        await manager.broadcast({"type": "status", "status": {"SYSTEM": {"state": "error", "message": f"Fatal monitor error: {str(exc)}", "updatedAt": _iso_now()}}})
+        market_status["SYSTEM"] = {"state": "error", "message": f"Fatal monitor error: {str(exc)}", "updatedAt": _iso_now()}
+        await manager.broadcast({"type": "status", "status": market_status})
     finally:
         with suppress(Exception):
             exchange.close()
