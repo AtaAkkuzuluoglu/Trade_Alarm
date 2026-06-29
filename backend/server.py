@@ -197,7 +197,7 @@ async def _fetch_top_usdt_pairs(exchange: ccxt.Exchange, limit: int = 50) -> lis
 
 
 async def monitor_markets() -> None:
-    exchange = ccxt.bybit({"enableRateLimit": True, "options": {"defaultType": "swap"}})
+    exchange = ccxt.kucoinfutures({"enableRateLimit": True})
     global SYMBOLS
     try:
         if not SYMBOLS:
