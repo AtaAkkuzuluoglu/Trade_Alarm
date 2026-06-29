@@ -135,6 +135,34 @@ def detect_setup(df: pd.DataFrame, current_index: int) -> dict:
 
     current_candle = df.iloc[current_index]
 
+    # MEGA SWEEP CHECK: Is current_candle a sweep of a liquidity peak >= 40 bars ago?
+    curr_liquidity_high = current_candle["swept_liquidity_high"]
+    curr_liquidity_pos_value = current_candle["swept_liquidity_high_pos"]
+    
+    if not pd.isna(curr_liquidity_high) and not pd.isna(curr_liquidity_pos_value):
+        curr_liquidity_pos = int(curr_liquidity_pos_value)
+        if current_index - curr_liquidity_pos >= 40:
+            if current_candle["high"] <= curr_liquidity_high * (1 + MAX_SWEEP_DEVIATION):
+                candle_range = current_candle["high"] - current_candle["low"]
+                if candle_range > 0:
+                    upper_wick = current_candle["high"] - max(current_candle["open"], current_candle["close"])
+                    close_position = (current_candle["close"] - current_candle["low"]) / candle_range
+                    if (upper_wick / candle_range >= MIN_REJECTION_WICK_RATIO and close_position <= MAX_CLOSE_POSITION):
+                        ema_aligned = bool(current_candle["close"] < current_candle["ema"])
+                        return {
+                            "trigger": True,
+                            "is_mega_sweep": True,
+                            "sweep_time": df.index[current_index] if isinstance(df.index, pd.DatetimeIndex) else current_index,
+                            "breakdown_time": df.index[current_index] if isinstance(df.index, pd.DatetimeIndex) else current_index,
+                            "liquidity_time": df.index[curr_liquidity_pos] if isinstance(df.index, pd.DatetimeIndex) else curr_liquidity_pos,
+                            "swing_low_time": df.index[current_index] if isinstance(df.index, pd.DatetimeIndex) else current_index,
+                            "liquidity_level": float(curr_liquidity_high),
+                            "breakdown_level": float(current_candle["low"]),
+                            "sweep_high": float(current_candle["high"]),
+                            "breakdown_close": float(current_candle["close"]),
+                            "ema_aligned": ema_aligned,
+                        }
+
     earliest_sweep = max(EMA_LENGTH, current_index - MAX_BARS_AFTER_SWEEP)
 
     for sweep_idx in range(current_index - 1, earliest_sweep - 1, -1):

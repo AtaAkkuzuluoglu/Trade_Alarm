@@ -32,6 +32,7 @@ type AlertPayload = {
   sweepHigh: number;
   breakdownClose: number;
   emaAligned?: boolean;
+  isMegaSweep?: boolean;
   debug?: boolean;
 };
 
@@ -334,9 +335,15 @@ export default function Home() {
                             <span className="text-lg font-semibold text-zinc-50">
                               {alert.symbol}
                             </span>
-                            <span className="rounded-md border border-rose-500/30 bg-rose-500/10 px-2 py-0.5 text-xs font-medium uppercase text-rose-300">
-                              Short
-                            </span>
+                            {alert.isMegaSweep ? (
+                              <span className="rounded-md border border-cyan-500/30 bg-cyan-500/10 px-2 py-0.5 text-xs font-medium uppercase text-cyan-300">
+                                Mega Sweep
+                              </span>
+                            ) : (
+                              <span className="rounded-md border border-rose-500/30 bg-rose-500/10 px-2 py-0.5 text-xs font-medium uppercase text-rose-300">
+                                Short
+                              </span>
+                            )}
                             {alert.emaAligned && (
                               <span className="rounded-md border border-purple-500/30 bg-purple-500/10 px-2 py-0.5 text-xs font-medium uppercase text-purple-300">
                                 EMA 200 Aligned
