@@ -216,6 +216,8 @@ async def monitor_markets() -> None:
                 await asyncio.sleep(max(exchange.rateLimit / 1000, 0.2))
             await manager.broadcast({"type": "status", "status": market_status})
             await asyncio.sleep(POLL_SECONDS)
+    except Exception as exc:
+        await manager.broadcast({"type": "status", "status": {"SYSTEM": {"state": "error", "message": f"Fatal monitor error: {str(exc)}", "updatedAt": _iso_now()}}})
     finally:
         with suppress(Exception):
             exchange.close()
