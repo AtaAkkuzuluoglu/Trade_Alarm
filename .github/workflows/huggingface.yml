@@ -12,7 +12,17 @@ jobs:
         with:
           fetch-depth: 0
           lfs: true
-      - name: Push to hub
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          
+      - name: Install Hugging Face Hub
+        run: pip install huggingface_hub
+        
+      - name: Push to HF Spaces
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: git push --force https://Caliax:$HF_TOKEN@huggingface.co/spaces/Caliax/Trade_Alarm main
+        run: |
+          huggingface-cli upload Caliax/Trade_Alarm ./ . --repo-type=space --commit-message="Auto-sync from GitHub"
