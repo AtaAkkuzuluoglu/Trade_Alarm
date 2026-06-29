@@ -38,7 +38,7 @@ def _symbols_from_env() -> list[str]:
 
 SYMBOLS = _symbols_from_env()
 TIMEFRAME = os.getenv("TIMEFRAME", "1h")
-HISTORY_LIMIT = max(EMA_LENGTH + 100, _env_int("HISTORY_LIMIT", 600))
+HISTORY_LIMIT = _env_int("HISTORY_LIMIT", 200)
 POLL_SECONDS = max(60, _env_int("POLL_SECONDS", 300))
 STARTUP_SCAN = _env_bool("STARTUP_SCAN", False)
 DEBUG_ALERTS = _env_bool("DEBUG_ALERTS", True)
