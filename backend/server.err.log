@@ -1,0 +1,49 @@
+fatal: bad revision 'HEAD'
+INFO:     Started server process [26340]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     127.0.0.1:63024 - "WebSocket /ws/alerts" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     127.0.0.1:64294 - "WebSocket /ws/alerts" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     127.0.0.1:58527 - "WebSocket /ws/alerts" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     127.0.0.1:63620 - "WebSocket /ws/alerts" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     127.0.0.1:62756 - "WebSocket /ws/alerts" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     127.0.0.1:53171 - "WebSocket /ws/alerts" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     127.0.0.1:50543 - "WebSocket /ws/alerts" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     127.0.0.1:54901 - "WebSocket /ws/alerts" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     127.0.0.1:63320 - "WebSocket /ws/alerts" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     127.0.0.1:59092 - "WebSocket /ws/alerts" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     127.0.0.1:62844 - "WebSocket /ws/alerts" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     127.0.0.1:50782 - "WebSocket /ws/alerts" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     127.0.0.1:53279 - "WebSocket /ws/alerts" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     127.0.0.1:54477 - "WebSocket /ws/alerts" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     127.0.0.1:56655 - "WebSocket /ws/alerts" [accepted]
+INFO:     connection open

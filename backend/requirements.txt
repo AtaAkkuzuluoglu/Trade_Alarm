@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+websockets
+ccxt
+pandas
+pandas-ta
