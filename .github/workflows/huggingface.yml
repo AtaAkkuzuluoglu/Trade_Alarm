@@ -25,4 +25,4 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          huggingface-cli upload Caliax/Trade_Alarm ./ . --repo-type=space --commit-message="Auto-sync from GitHub"
+          hf upload Caliax/Trade_Alarm ./ . --repo-type=space --commit-message="Auto-sync from GitHub"
