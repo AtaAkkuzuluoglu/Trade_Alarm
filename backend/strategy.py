@@ -4,7 +4,7 @@ import math
 import pandas as pd
 
 
-EMA_LENGTH = 200
+EMA_LENGTH = 150
 LIQUIDITY_LOOKBACK_MIN = 5
 LIQUIDITY_LOOKBACK_MAX = 500
 SWING_STRENGTH = 2
@@ -23,7 +23,7 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
     if result.empty:
         return result
 
-    result["ema_200"] = result["close"].ewm(span=EMA_LENGTH, adjust=False).mean()
+    result["ema"] = result["close"].ewm(span=EMA_LENGTH, adjust=False).mean()
 
     swing_window = (SWING_STRENGTH * 2) + 1
     result["is_swing_low"] = result["low"].eq(
@@ -39,7 +39,7 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
     lows = result["low"].to_numpy()
     highs = result["high"].to_numpy()
     closes = result["close"].to_numpy()
-    ema = result["ema_200"].to_numpy()
+    ema = result["ema"].to_numpy()
     swing_lows = result["is_swing_low"].to_numpy()
     swing_highs = result["is_swing_high"].to_numpy()
 
@@ -128,12 +128,12 @@ def detect_setup(df: pd.DataFrame, current_index: int) -> dict:
     """
     Evaluates the Short setup on the candle at current_index.
     """
-    if current_index < EMA_LENGTH or pd.isna(df["ema_200"].iloc[current_index]):
+    if current_index < EMA_LENGTH or pd.isna(df["ema"].iloc[current_index]):
         return {"trigger": False, "reason": "Not enough data"}
 
     current_candle = df.iloc[current_index]
     # SHORT FILTER: Must be below 200 EMA
-    if current_candle["close"] >= current_candle["ema_200"]:
+    if current_candle["close"] >= current_candle["ema"]:
         return {"trigger": False, "reason": "Above 200 EMA"}
 
     earliest_sweep = max(EMA_LENGTH, current_index - MAX_BARS_AFTER_SWEEP)
@@ -156,7 +156,7 @@ def detect_setup(df: pd.DataFrame, current_index: int) -> dict:
         liquidity_pos = int(liquidity_pos_value)
         swing_low_pos = int(swing_low_pos_value)
 
-        if sweep_candle["close"] >= sweep_candle["ema_200"]:
+        if sweep_candle["close"] >= sweep_candle["ema"]:
             continue
 
         if sweep_candle["high"] > liquidity_high * (1 + MAX_SWEEP_DEVIATION):
