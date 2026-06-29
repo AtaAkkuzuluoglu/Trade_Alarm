@@ -70,10 +70,12 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
         liquidity_highs.append(float(highs[latest_liquidity_pos]))
         liquidity_positions.append(float(latest_liquidity_pos))
 
-        # Sweep: high goes above liquidity high, but close is below it, and we are below 200 EMA
+        # Sweep: high goes above liquidity high, but close is below it. Must be at least 20 bars apart.
         swept_positions = []
         for candidate_pos in swing_high_positions:
-            if highs[pos] > highs[candidate_pos] > closes[pos] and highs[candidate_pos] < ema[candidate_pos]:
+            if pos - candidate_pos < 20:
+                continue
+            if highs[pos] > highs[candidate_pos] > closes[pos]:
                 # ZigZag Rule: No candle between Point 1 and Point 2 can close above Point 1's high
                 intermediate_closes = closes[candidate_pos:pos]
                 if len(intermediate_closes) == 0 or intermediate_closes.max() <= highs[candidate_pos]:
@@ -132,9 +134,6 @@ def detect_setup(df: pd.DataFrame, current_index: int) -> dict:
         return {"trigger": False, "reason": "Not enough data"}
 
     current_candle = df.iloc[current_index]
-    # SHORT FILTER: Must be below 200 EMA
-    if current_candle["close"] >= current_candle["ema"]:
-        return {"trigger": False, "reason": "Above 200 EMA"}
 
     earliest_sweep = max(EMA_LENGTH, current_index - MAX_BARS_AFTER_SWEEP)
 
@@ -156,8 +155,7 @@ def detect_setup(df: pd.DataFrame, current_index: int) -> dict:
         liquidity_pos = int(liquidity_pos_value)
         swing_low_pos = int(swing_low_pos_value)
 
-        if sweep_candle["close"] >= sweep_candle["ema"]:
-            continue
+        ema_aligned = bool(sweep_candle["close"] < sweep_candle["ema"] and current_candle["close"] < current_candle["ema"])
 
         if sweep_candle["high"] > liquidity_high * (1 + MAX_SWEEP_DEVIATION):
             continue
@@ -198,6 +196,7 @@ def detect_setup(df: pd.DataFrame, current_index: int) -> dict:
                 "breakdown_level": swing_low_to_break,
                 "sweep_high": float(sweep_candle["high"]), # Point 5 Stop Loss
                 "breakdown_close": float(current_candle["close"]),
+                "ema_aligned": ema_aligned,
             }
 
     return {"trigger": False, "reason": "No setup found"}

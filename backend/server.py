@@ -123,6 +123,7 @@ def _alert_payload(symbol: str, timeframe: str, result: dict[str, Any]) -> dict[
         "breakdownLevel": round(float(result["breakdown_level"]), 8),
         "sweepHigh": round(float(result["sweep_high"]), 8),
         "breakdownClose": round(float(result["breakdown_close"]), 8),
+        "emaAligned": result.get("ema_aligned", False),
     }
 
 

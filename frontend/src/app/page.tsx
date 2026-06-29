@@ -31,6 +31,7 @@ type AlertPayload = {
   breakdownLevel: number;
   sweepHigh: number;
   breakdownClose: number;
+  emaAligned?: boolean;
   debug?: boolean;
 };
 
@@ -336,6 +337,11 @@ export default function Home() {
                             <span className="rounded-md border border-rose-500/30 bg-rose-500/10 px-2 py-0.5 text-xs font-medium uppercase text-rose-300">
                               Short
                             </span>
+                            {alert.emaAligned && (
+                              <span className="rounded-md border border-purple-500/30 bg-purple-500/10 px-2 py-0.5 text-xs font-medium uppercase text-purple-300">
+                                EMA 200 Aligned
+                              </span>
+                            )}
                             {alert.debug ? (
                               <span className="rounded-md border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 text-xs font-medium text-amber-200">
                                 Test
