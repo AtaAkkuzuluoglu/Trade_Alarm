@@ -409,3 +409,7 @@ async def websocket_alerts(websocket: WebSocket) -> None:
                 await websocket.send_json({"type": "pong", "at": _iso_now()})
     except WebSocketDisconnect:
         manager.disconnect(websocket)
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=False)
