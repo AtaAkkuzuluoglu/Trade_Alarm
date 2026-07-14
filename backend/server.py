@@ -263,14 +263,17 @@ async def _fetch_top_usdt_pairs(exchange: ccxt.Exchange, limit: int = 200) -> li
 # Monitor loops
 # ---------------------------------------------------------------------------
 
-async def _loop_daily(exchange: ccxt.Exchange) -> None:
+async def _loop_daily() -> None:
     """Scan top-200 USDT pairs on 1D timeframe, min 10 bars."""
+    exchange = ccxt.kucoinfutures({"enableRateLimit": True})
     global daily_symbols
-    try:
-        daily_symbols = await _fetch_top_usdt_pairs(exchange, limit=DAILY_TOP_LIMIT)
-    except Exception as exc:
-        market_status["DAILY_SYSTEM"] = {"state": "error", "message": f"Failed to fetch daily pairs: {exc}", "updatedAt": _iso_now()}
-        return
+    while True:
+        try:
+            daily_symbols = await _fetch_top_usdt_pairs(exchange, limit=DAILY_TOP_LIMIT)
+            break
+        except Exception as exc:
+            market_status["DAILY_SYSTEM"] = {"state": "error", "message": f"Failed to fetch daily pairs: {exc}", "updatedAt": _iso_now()}
+            await asyncio.sleep(10)
 
     while True:
         for symbol in daily_symbols:
@@ -285,8 +288,9 @@ async def _loop_daily(exchange: ccxt.Exchange) -> None:
         await asyncio.sleep(POLL_SECONDS)
 
 
-async def _loop_hourly(exchange: ccxt.Exchange) -> None:
+async def _loop_hourly() -> None:
     """Scan belge.txt watchlist on 1H timeframe, min 15 bars."""
+    exchange = ccxt.kucoinfutures({"enableRateLimit": True})
     while True:
         for symbol in HOURLY_SYMBOLS:
             try:
@@ -301,11 +305,10 @@ async def _loop_hourly(exchange: ccxt.Exchange) -> None:
 
 
 async def monitor_markets() -> None:
-    exchange = ccxt.kucoinfutures({"enableRateLimit": True})
     try:
         await asyncio.gather(
-            _loop_daily(exchange),
-            _loop_hourly(exchange),
+            _loop_daily(),
+            _loop_hourly(),
         )
     except Exception as exc:
         market_status["SYSTEM"] = {
@@ -314,9 +317,6 @@ async def monitor_markets() -> None:
             "updatedAt": _iso_now(),
         }
         await manager.broadcast({"type": "status", "status": market_status})
-    finally:
-        with suppress(Exception):
-            exchange.close()
 
 
 # ---------------------------------------------------------------------------
