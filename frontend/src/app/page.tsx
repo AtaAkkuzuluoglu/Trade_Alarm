@@ -77,7 +77,9 @@ function formatTime(value?: string) {
   }
 }
 
-function formatPrice(value: number) {
+function formatPrice(value?: number) {
+  if (value === undefined || value === null || Number.isNaN(value)) return "0.0000";
+  
   if (value >= 100) {
     return value.toLocaleString(undefined, {
       minimumFractionDigits: 2,
