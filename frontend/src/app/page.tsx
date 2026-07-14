@@ -121,6 +121,7 @@ export default function Home() {
   const [soundEnabled, setSoundEnabled] = useState(false);
   const [lastMessageAt, setLastMessageAt] = useState<string>();
   const [filterTab, setFilterTab] = useState<FilterTab>("all");
+  const [statusTab, setStatusTab] = useState<FilterTab>("all");
   const audioContextRef = useRef<AudioContext | null>(null);
   const soundEnabledRef = useRef(false);
 
@@ -132,6 +133,14 @@ export default function Home() {
     () => Object.entries(status).sort(([a], [b]) => a.localeCompare(b)),
     [status],
   );
+
+  const filteredStatusEntries = useMemo(() => {
+    if (statusTab === "all") return statusEntries;
+    return statusEntries.filter(([key, item]) => {
+      const tf = item.timeframe || (key.endsWith("|1d") ? "1d" : key.endsWith("|1h") ? "1h" : "1h");
+      return tf === statusTab;
+    });
+  }, [statusEntries, statusTab]);
 
   const onlineCount = statusEntries.filter(([, v]) => v.state === "online").length;
 
@@ -449,15 +458,33 @@ export default function Home() {
           </div>
 
           <aside className="rounded-md border border-zinc-800 bg-[#141416]">
-            <div className="border-b border-zinc-800 px-4 py-3">
-              <h2 className="text-base font-semibold text-zinc-50">Market Status</h2>
-              <p className="text-sm text-zinc-400">Dual scanner (1D + 1H)</p>
+            <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
+              <div>
+                <h2 className="text-base font-semibold text-zinc-50">Market Status</h2>
+                <p className="text-sm text-zinc-400">Dual scanner (1D + 1H)</p>
+              </div>
+              <div className="flex items-center gap-1">
+                {(["all", "1d", "1h"] as FilterTab[]).map((tab) => (
+                  <button
+                    key={tab}
+                    onClick={() => setStatusTab(tab)}
+                    className={`rounded-md px-3 py-1.5 text-xs font-medium uppercase transition ${
+                      statusTab === tab
+                        ? "bg-zinc-700 text-zinc-50"
+                        : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+                    }`}
+                    type="button"
+                  >
+                    {tab === "all" ? "All" : tab}
+                  </button>
+                ))}
+              </div>
             </div>
             <div className="divide-y divide-zinc-800 max-h-[620px] overflow-y-auto custom-scrollbar">
-              {statusEntries.length === 0 ? (
+              {filteredStatusEntries.length === 0 ? (
                 <div className="p-4 text-sm text-zinc-400">Waiting for backend status</div>
               ) : (
-                statusEntries.map(([key, item]) => (
+                filteredStatusEntries.map(([key, item]) => (
                   <div className="p-4" key={key}>
                     <div className="flex items-center justify-between gap-3">
                       <div className="flex min-w-0 items-center gap-2">
