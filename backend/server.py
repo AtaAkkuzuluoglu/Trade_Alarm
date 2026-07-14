@@ -267,16 +267,21 @@ async def _loop_daily() -> None:
     """Scan top-200 USDT pairs on 1D timeframe, min 10 bars."""
     exchange = ccxt.kucoinfutures({"enableRateLimit": True})
     global daily_symbols
+    market_status["DEBUG_1D"] = {"state": "online", "message": "Starting daily loop", "updatedAt": _iso_now()}
     while True:
         try:
             daily_symbols = await _fetch_top_usdt_pairs(exchange, limit=DAILY_TOP_LIMIT)
+            market_status["DEBUG_1D"] = {"state": "online", "message": f"Fetched {len(daily_symbols)} daily symbols", "updatedAt": _iso_now()}
             break
         except Exception as exc:
             market_status["DAILY_SYSTEM"] = {"state": "error", "message": f"Failed to fetch daily pairs: {exc}", "updatedAt": _iso_now()}
             await asyncio.sleep(10)
 
     while True:
-        for symbol in daily_symbols:
+        market_status["DEBUG_1D"] = {"state": "online", "message": "Starting 1D symbol processing", "updatedAt": _iso_now()}
+        for i, symbol in enumerate(daily_symbols):
+            if i % 10 == 0:
+                market_status["DEBUG_1D"] = {"state": "online", "message": f"Processing 1D {i}/{len(daily_symbols)}", "updatedAt": _iso_now()}
             try:
                 await _process_symbol(exchange, symbol, "1d", HISTORY_LIMIT_1D, MIN_BARS_1D)
             except Exception as exc:
