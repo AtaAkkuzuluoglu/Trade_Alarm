@@ -60,19 +60,21 @@ type SocketMessage =
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://127.0.0.1:8000/ws/alerts";
 
-const timeFormatter = new Intl.DateTimeFormat("tr-TR", {
-  month: "short",
-  day: "2-digit",
-  hour: "2-digit",
-  minute: "2-digit",
-  timeZone: "Europe/Istanbul",
-});
-
 function formatTime(value?: string) {
   if (!value) return "Waiting";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return timeFormatter.format(date);
+  try {
+    return new Intl.DateTimeFormat("tr-TR", {
+      month: "short",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: "Europe/Istanbul",
+    }).format(date);
+  } catch (err) {
+    return date.toLocaleString("tr-TR");
+  }
 }
 
 function formatPrice(value: number) {
@@ -182,7 +184,14 @@ export default function Home() {
 
     function connect() {
       setConnectionState("connecting");
-      ws = new WebSocket(WS_URL);
+      try {
+        ws = new WebSocket(WS_URL);
+      } catch (err) {
+        console.error("WebSocket failed:", err);
+        setConnectionState("closed");
+        if (alive) timer = setTimeout(connect, 5000);
+        return;
+      }
 
       ws.onopen = () => {
         setConnectionState("open");
