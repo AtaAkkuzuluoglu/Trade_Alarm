@@ -1,230 +1,146 @@
+"""
+Liquidity Sweep Strategy — Detects LONG and SHORT setups.
+
+LONG (Sellside Liquidity Sweep):
+    Point 1 = a confirmed swing LOW
+    Point 2 = a candle whose wick goes BELOW Point 1's low, but CLOSES ABOVE it
+
+SHORT (Buyside Liquidity Sweep):
+    Point 1 = a confirmed swing HIGH
+    Point 2 = a candle whose wick goes ABOVE Point 1's high, but CLOSES BELOW it
+
+Distance rule: min_bars between Point 1 and Point 2 (configurable per timeframe).
+EMA 200 is computed and reported as a flag but does NOT filter signals.
+
+Each swing point can only be swept ONCE — after that it is consumed and
+will not generate further alerts.
+"""
+
 from __future__ import annotations
 
-import math
 import pandas as pd
 
-
-EMA_LENGTH = 150
-LIQUIDITY_LOOKBACK_MIN = 5
-LIQUIDITY_LOOKBACK_MAX = 500
-SWING_STRENGTH = 2
-MAX_BARS_AFTER_SWEEP = 72
-MIN_REJECTION_WICK_RATIO = 0.40
-MAX_CLOSE_POSITION = 0.55
-MAX_SWEEP_DEVIATION = 0.015  # Max 1.5% sweep deviation for equal highs
+EMA_LENGTH = 200
+SWING_STRENGTH = 5            # A swing is confirmed with N bars on each side (11-bar window)
+LOOKBACK_MAX = 500            # Max bars to look back for a swing point
+LOOKBACK_MIN = 5              # Min bars to look back (avoid immediate swings)
 
 
 def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Calculates the 200 EMA and identifies confirmed swing highs/lows.
-    Requires a pandas DataFrame with 'open', 'high', 'low', 'close', 'volume' columns.
-    """
+    """Add EMA and confirmed swing high/low flags to the dataframe."""
     result = df.copy()
     if result.empty:
         return result
 
     result["ema"] = result["close"].ewm(span=EMA_LENGTH, adjust=False).mean()
 
-    swing_window = (SWING_STRENGTH * 2) + 1
+    window = (SWING_STRENGTH * 2) + 1
     result["is_swing_low"] = result["low"].eq(
-        result["low"].rolling(window=swing_window, center=True).min()
+        result["low"].rolling(window=window, center=True).min()
     )
     result["is_swing_high"] = result["high"].eq(
-        result["high"].rolling(window=swing_window, center=True).max()
+        result["high"].rolling(window=window, center=True).max()
     )
     result[["is_swing_low", "is_swing_high"]] = result[
         ["is_swing_low", "is_swing_high"]
     ].fillna(False)
 
-    lows = result["low"].to_numpy()
-    highs = result["high"].to_numpy()
-    closes = result["close"].to_numpy()
-    ema = result["ema"].to_numpy()
-    swing_lows = result["is_swing_low"].to_numpy()
-    swing_highs = result["is_swing_high"].to_numpy()
-
-    liquidity_highs: list[float] = []
-    liquidity_positions: list[float] = []
-    swept_liquidity_highs: list[float] = []
-    swept_liquidity_positions: list[float] = []
-    breakdown_levels: list[float] = []
-    breakdown_positions: list[float] = []
-
-    for pos in range(len(result)):
-        start = max(0, pos - LIQUIDITY_LOOKBACK_MAX)
-        end = max(0, pos - LIQUIDITY_LOOKBACK_MIN + 1)
-        swing_high_positions = [
-            candidate_pos for candidate_pos in range(start, end) if swing_highs[candidate_pos]
-        ]
-
-        if not swing_high_positions:
-            liquidity_highs.append(math.nan)
-            liquidity_positions.append(math.nan)
-            swept_liquidity_highs.append(math.nan)
-            swept_liquidity_positions.append(math.nan)
-            breakdown_levels.append(math.nan)
-            breakdown_positions.append(math.nan)
-            continue
-
-        latest_liquidity_pos = swing_high_positions[-1]
-        liquidity_highs.append(float(highs[latest_liquidity_pos]))
-        liquidity_positions.append(float(latest_liquidity_pos))
-
-        # Sweep: high goes above liquidity high, but close is below it. Must be at least 20 bars apart.
-        swept_positions = []
-        for candidate_pos in swing_high_positions:
-            if pos - candidate_pos < 20:
-                continue
-            if highs[pos] > highs[candidate_pos] > closes[pos]:
-                # ZigZag Rule: No candle between Point 1 and Point 2 can close above Point 1's high
-                intermediate_closes = closes[candidate_pos:pos]
-                if len(intermediate_closes) == 0 or intermediate_closes.max() <= highs[candidate_pos]:
-                    swept_positions.append(candidate_pos)
-        
-        if not swept_positions:
-            swept_liquidity_highs.append(math.nan)
-            swept_liquidity_positions.append(math.nan)
-            breakdown_levels.append(math.nan)
-            breakdown_positions.append(math.nan)
-            continue
-
-        swept_pos = swept_positions[-1]
-        swept_liquidity_highs.append(float(highs[swept_pos]))
-        swept_liquidity_positions.append(float(swept_pos))
-
-        breakdown_ceiling = min(highs[swept_pos], closes[pos])
-        prior_low_positions = [
-            candidate_pos
-            for candidate_pos in range(swept_pos, pos)
-            if swing_lows[candidate_pos] and lows[candidate_pos] < breakdown_ceiling
-        ]
-        if prior_low_positions:
-            low_pos = prior_low_positions[-1]
-        else:
-            fallback_start = max(0, pos - LIQUIDITY_LOOKBACK_MIN)
-            fallback_positions = [
-                candidate_pos
-                for candidate_pos in range(fallback_start, pos)
-                if lows[candidate_pos] < breakdown_ceiling
-            ]
-            low_pos = min(fallback_positions, key=lambda candidate_pos: lows[candidate_pos]) if fallback_positions else None
-
-        if low_pos is None:
-            breakdown_levels.append(math.nan)
-            breakdown_positions.append(math.nan)
-        else:
-            breakdown_levels.append(float(lows[low_pos]))
-            breakdown_positions.append(float(low_pos))
-
-    result["liquidity_high"] = liquidity_highs
-    result["liquidity_high_pos"] = liquidity_positions
-    result["swept_liquidity_high"] = swept_liquidity_highs
-    result["swept_liquidity_high_pos"] = swept_liquidity_positions
-    result["swing_low_to_break"] = breakdown_levels
-    result["swing_low_to_break_pos"] = breakdown_positions
-
     return result
 
 
-def detect_setup(df: pd.DataFrame, current_index: int) -> dict:
+def detect_sweeps(
+    df: pd.DataFrame,
+    current_index: int,
+    min_bars: int = 10,
+    consumed: set[tuple[str, int]] | None = None,
+) -> list[dict]:
     """
-    Evaluates the Short setup on the candle at current_index.
+    At the candle at *current_index*, check whether it sweeps any past
+    swing high (SHORT) or swing low (LONG) that is at least *min_bars* away
+    and hasn't been consumed yet.
+
+    *consumed* is a set of (direction, swing_position) tuples that have
+    already been triggered.  When a new trigger fires, the caller should
+    add it to the set so the same swing point is not re-triggered.
+
+    Returns a list of trigger dicts (0, 1 or 2 — at most one per direction).
     """
-    if current_index < EMA_LENGTH or pd.isna(df["ema"].iloc[current_index]):
-        return {"trigger": False, "reason": "Not enough data"}
+    if current_index < max(EMA_LENGTH, min_bars + LOOKBACK_MIN):
+        return []
 
-    current_candle = df.iloc[current_index]
+    if consumed is None:
+        consumed = set()
 
-    # MEGA SWEEP CHECK: Is current_candle a sweep of a liquidity peak >= 40 bars ago?
-    curr_liquidity_high = current_candle["swept_liquidity_high"]
-    curr_liquidity_pos_value = current_candle["swept_liquidity_high_pos"]
-    
-    if not pd.isna(curr_liquidity_high) and not pd.isna(curr_liquidity_pos_value):
-        curr_liquidity_pos = int(curr_liquidity_pos_value)
-        if current_index - curr_liquidity_pos >= 40:
-            if current_candle["high"] <= curr_liquidity_high * (1 + MAX_SWEEP_DEVIATION):
-                candle_range = current_candle["high"] - current_candle["low"]
-                if candle_range > 0:
-                    upper_wick = current_candle["high"] - max(current_candle["open"], current_candle["close"])
-                    close_position = (current_candle["close"] - current_candle["low"]) / candle_range
-                    if (upper_wick / candle_range >= MIN_REJECTION_WICK_RATIO and close_position <= MAX_CLOSE_POSITION):
-                        ema_aligned = bool(current_candle["close"] < current_candle["ema"])
-                        return {
-                            "trigger": True,
-                            "is_mega_sweep": True,
-                            "sweep_time": df.index[current_index] if isinstance(df.index, pd.DatetimeIndex) else current_index,
-                            "breakdown_time": df.index[current_index] if isinstance(df.index, pd.DatetimeIndex) else current_index,
-                            "liquidity_time": df.index[curr_liquidity_pos] if isinstance(df.index, pd.DatetimeIndex) else curr_liquidity_pos,
-                            "swing_low_time": df.index[current_index] if isinstance(df.index, pd.DatetimeIndex) else current_index,
-                            "liquidity_level": float(curr_liquidity_high),
-                            "breakdown_level": float(current_candle["low"]),
-                            "sweep_high": float(current_candle["high"]),
-                            "breakdown_close": float(current_candle["close"]),
-                            "ema_aligned": ema_aligned,
-                        }
+    candle = df.iloc[current_index]
+    highs = df["high"].to_numpy()
+    lows = df["low"].to_numpy()
+    swing_highs = df["is_swing_high"].to_numpy()
+    swing_lows = df["is_swing_low"].to_numpy()
 
-    earliest_sweep = max(EMA_LENGTH, current_index - MAX_BARS_AFTER_SWEEP)
+    start = max(0, current_index - LOOKBACK_MAX)
+    end = current_index - min_bars  # must be at least min_bars before
 
-    for sweep_idx in range(current_index - 1, earliest_sweep - 1, -1):
-        sweep_candle = df.iloc[sweep_idx]
-        liquidity_high = sweep_candle["swept_liquidity_high"]
-        liquidity_pos_value = sweep_candle["swept_liquidity_high_pos"]
-        swing_low_to_break = sweep_candle["swing_low_to_break"]
-        swing_low_pos_value = sweep_candle["swing_low_to_break_pos"]
-        
-        if (
-            pd.isna(liquidity_high)
-            or pd.isna(liquidity_pos_value)
-            or pd.isna(swing_low_to_break)
-            or pd.isna(swing_low_pos_value)
-        ):
+    if end < start:
+        return []
+
+    triggers: list[dict] = []
+
+    # --- LONG: sellside liquidity sweep ---
+    best_long_pos = None
+    for pos in range(end, start - 1, -1):
+        if not swing_lows[pos]:
             continue
-            
-        liquidity_pos = int(liquidity_pos_value)
-        swing_low_pos = int(swing_low_pos_value)
-
-        ema_aligned = bool(sweep_candle["close"] < sweep_candle["ema"] and current_candle["close"] < current_candle["ema"])
-
-        if sweep_candle["high"] > liquidity_high * (1 + MAX_SWEEP_DEVIATION):
+        if ("LONG", pos) in consumed:
             continue
+        swing_low_price = lows[pos]
+        if candle["low"] < swing_low_price and candle["close"] > swing_low_price:
+            best_long_pos = pos
+            break
 
-        candle_range = sweep_candle["high"] - sweep_candle["low"]
-        if candle_range <= 0:
+    if best_long_pos is not None:
+        swing_low_price = float(lows[best_long_pos])
+        ema_val = candle["ema"] if not pd.isna(candle["ema"]) else None
+        ema_aligned = bool(ema_val is not None and candle["close"] > ema_val)
+        consumed.add(("LONG", best_long_pos))
+        triggers.append({
+            "trigger": True,
+            "direction": "LONG",
+            "sweep_time": df.index[current_index] if isinstance(df.index, pd.DatetimeIndex) else current_index,
+            "liquidity_time": df.index[best_long_pos] if isinstance(df.index, pd.DatetimeIndex) else best_long_pos,
+            "liquidity_level": swing_low_price,
+            "sweep_low": float(candle["low"]),
+            "close_price": float(candle["close"]),
+            "ema_aligned": ema_aligned,
+            "bars_between": current_index - best_long_pos,
+        })
+
+    # --- SHORT: buyside liquidity sweep ---
+    best_short_pos = None
+    for pos in range(end, start - 1, -1):
+        if not swing_highs[pos]:
             continue
-
-        # Top wick rejection logic
-        upper_wick = sweep_candle["high"] - max(sweep_candle["open"], sweep_candle["close"])
-        close_position = (sweep_candle["close"] - sweep_candle["low"]) / candle_range
-        has_heavy_rejection = (
-            upper_wick / candle_range >= MIN_REJECTION_WICK_RATIO
-            and close_position <= MAX_CLOSE_POSITION
-        )
-
-        if not has_heavy_rejection:
+        if ("SHORT", pos) in consumed:
             continue
+        swing_high_price = highs[pos]
+        if candle["high"] > swing_high_price and candle["close"] < swing_high_price:
+            best_short_pos = pos
+            break
 
-        previous_breaks = df.iloc[sweep_idx + 1 : current_index]["close"] < swing_low_to_break
-        if previous_breaks.any():
-            continue
+    if best_short_pos is not None:
+        swing_high_price = float(highs[best_short_pos])
+        ema_val = candle["ema"] if not pd.isna(candle["ema"]) else None
+        ema_aligned = bool(ema_val is not None and candle["close"] < ema_val)
+        consumed.add(("SHORT", best_short_pos))
+        triggers.append({
+            "trigger": True,
+            "direction": "SHORT",
+            "sweep_time": df.index[current_index] if isinstance(df.index, pd.DatetimeIndex) else current_index,
+            "liquidity_time": df.index[best_short_pos] if isinstance(df.index, pd.DatetimeIndex) else best_short_pos,
+            "liquidity_level": swing_high_price,
+            "sweep_high": float(candle["high"]),
+            "close_price": float(candle["close"]),
+            "ema_aligned": ema_aligned,
+            "bars_between": current_index - best_short_pos,
+        })
 
-        # ENFORCEMENT: Point 2 must be the absolute highest peak. No candle after the sweep can go higher.
-        intermediate_highs = df.iloc[sweep_idx + 1 : current_index]["high"]
-        if (intermediate_highs > sweep_candle["high"]).any():
-            continue
-
-        # Point 3: The Breakdown confirmed by a strong red close below the structure
-        if current_candle["close"] < swing_low_to_break:
-            return {
-                "trigger": True,
-                "sweep_time": df.index[sweep_idx] if isinstance(df.index, pd.DatetimeIndex) else sweep_idx,
-                "breakdown_time": df.index[current_index] if isinstance(df.index, pd.DatetimeIndex) else current_index,
-                "liquidity_time": df.index[liquidity_pos] if isinstance(df.index, pd.DatetimeIndex) else liquidity_pos,
-                "swing_low_time": df.index[swing_low_pos] if swing_low_pos is not None and isinstance(df.index, pd.DatetimeIndex) else swing_low_pos,
-                "liquidity_level": liquidity_high,
-                "breakdown_level": swing_low_to_break,
-                "sweep_high": float(sweep_candle["high"]), # Point 5 Stop Loss
-                "breakdown_close": float(current_candle["close"]),
-                "ema_aligned": ema_aligned,
-            }
-
-    return {"trigger": False, "reason": "No setup found"}
+    return triggers

@@ -1,3 +1,10 @@
+"""
+Trading Alert Engine — Dual-loop scanner (1D + 1H).
+
+Loop 1 (daily):   Top-200 USDT pairs on KuCoin Futures, min_bars=10
+Loop 2 (hourly):  A fixed watchlist from HOURLY_SYMBOLS env / hardcoded, min_bars=15
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -12,8 +19,12 @@ import pandas as pd
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from strategy import EMA_LENGTH, calculate_indicators, detect_setup
+from strategy import EMA_LENGTH, calculate_indicators, detect_sweeps
 
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
 
 def _env_int(name: str, default: int) -> int:
     try:
@@ -29,27 +40,57 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return value.lower() in {"1", "true", "yes", "on"}
 
 
-def _symbols_from_env() -> list[str]:
-    raw = os.getenv("SYMBOLS", "")
+# belge.txt listesinden dönüştürülmüş KuCoin Futures formatındaki saatlik coinler
+_DEFAULT_HOURLY_SYMBOLS = [
+    "BTC/USDT:USDT", "ETH/USDT:USDT", "XRP/USDT:USDT", "SOL/USDT:USDT",
+    "TRX/USDT:USDT", "HYPE/USDT:USDT", "DOGE/USDT:USDT", "ZEC/USDT:USDT",
+    "XLM/USDT:USDT", "ADA/USDT:USDT", "XMR/USDT:USDT", "LINK/USDT:USDT",
+    "BCH/USDT:USDT", "LTC/USDT:USDT",
+    "HBAR/USDT:USDT", "SUI/USDT:USDT", "AVAX/USDT:USDT", "NEAR/USDT:USDT",
+    "TAO/USDT:USDT", "UNI/USDT:USDT", "ONDO/USDT:USDT",
+    "WLD/USDT:USDT", "DOT/USDT:USDT", "AAVE/USDT:USDT", "ICP/USDT:USDT",
+    "PEPE/USDT:USDT", "JUP/USDT:USDT", "ENA/USDT:USDT",
+    "FIL/USDT:USDT", "APT/USDT:USDT", "ARB/USDT:USDT",
+    "INJ/USDT:USDT", "DASH/USDT:USDT", "CAKE/USDT:USDT", "PENGU/USDT:USDT",
+    "RENDER/USDT:USDT", "COMP/USDT:USDT",
+    "PNUT/USDT:USDT", "POPCAT/USDT:USDT", "TRB/USDT:USDT",
+    "ALGO/USDT:USDT", "BNB/USDT:USDT",
+]
+
+
+def _symbols_from_env(env_name: str, default: list[str]) -> list[str]:
+    raw = os.getenv(env_name, "")
     if not raw:
-        return []
-    return [symbol.strip().upper() for symbol in raw.split(",") if symbol.strip()]
+        return default
+    return [s.strip().upper() for s in raw.split(",") if s.strip()]
 
 
-SYMBOLS = _symbols_from_env()
-TIMEFRAME = os.getenv("TIMEFRAME", "1h")
-HISTORY_LIMIT = _env_int("HISTORY_LIMIT", 200)
+HOURLY_SYMBOLS = _symbols_from_env("HOURLY_SYMBOLS", _DEFAULT_HOURLY_SYMBOLS)
+DAILY_TOP_LIMIT = _env_int("DAILY_TOP_LIMIT", 200)
+HISTORY_LIMIT_1H = _env_int("HISTORY_LIMIT_1H", 250)
+HISTORY_LIMIT_1D = _env_int("HISTORY_LIMIT_1D", 250)
 POLL_SECONDS = max(60, _env_int("POLL_SECONDS", 300))
 STARTUP_SCAN = _env_bool("STARTUP_SCAN", False)
 DEBUG_ALERTS = _env_bool("DEBUG_ALERTS", True)
 MAX_ALERT_MEMORY = _env_int("MAX_ALERT_MEMORY", 200)
 
+MIN_BARS_1H = 15
+MIN_BARS_1D = 10
+
+# ---------------------------------------------------------------------------
+# State
+# ---------------------------------------------------------------------------
 alerts: list[dict[str, Any]] = []
 market_status: dict[str, dict[str, Any]] = {}
 seen_alert_keys: set[str] = set()
 last_closed_timestamp: dict[str, int] = {}
-monitor_task: asyncio.Task | None = None
+consumed_points: dict[str, set[tuple[str, int]]] = {}  # per symbol|timeframe
+daily_symbols: list[str] = []
 
+
+# ---------------------------------------------------------------------------
+# Connection Manager
+# ---------------------------------------------------------------------------
 
 class ConnectionManager:
     def __init__(self) -> None:
@@ -63,18 +104,22 @@ class ConnectionManager:
         self._connections.discard(websocket)
 
     async def broadcast(self, payload: dict[str, Any]) -> None:
-        stale_connections: list[WebSocket] = []
-        for websocket in list(self._connections):
+        stale: list[WebSocket] = []
+        for ws in list(self._connections):
             try:
-                await websocket.send_json(payload)
+                await ws.send_json(payload)
             except RuntimeError:
-                stale_connections.append(websocket)
-        for websocket in stale_connections:
-            self.disconnect(websocket)
+                stale.append(ws)
+        for ws in stale:
+            self.disconnect(ws)
 
 
 manager = ConnectionManager()
 
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -108,23 +153,26 @@ def _fetch_closed_ohlcv(
     return [row for row in candles if row[0] + timeframe_ms <= now_ms]
 
 
+# ---------------------------------------------------------------------------
+# Alert payload
+# ---------------------------------------------------------------------------
+
 def _alert_payload(symbol: str, timeframe: str, result: dict[str, Any]) -> dict[str, Any]:
+    direction = result["direction"]  # "LONG" or "SHORT"
     return {
         "id": str(uuid.uuid4()),
         "type": "alert",
         "symbol": symbol,
         "timeframe": timeframe,
+        "direction": direction,
         "createdAt": _iso_now(),
         "sweepTime": _timestamp_to_iso(result["sweep_time"]),
-        "breakdownTime": _timestamp_to_iso(result["breakdown_time"]),
         "liquidityTime": _timestamp_to_iso(result["liquidity_time"]),
-        "swingLowTime": _timestamp_to_iso(result["swing_low_time"]),
         "liquidityLevel": round(float(result["liquidity_level"]), 8),
-        "breakdownLevel": round(float(result["breakdown_level"]), 8),
-        "sweepHigh": round(float(result["sweep_high"]), 8),
-        "breakdownClose": round(float(result["breakdown_close"]), 8),
+        "closePrice": round(float(result["close_price"]), 8),
+        "sweepExtreme": round(float(result.get("sweep_low", result.get("sweep_high", 0))), 8),
         "emaAligned": result.get("ema_aligned", False),
-        "isMegaSweep": result.get("is_mega_sweep", False),
+        "barsBetween": result.get("bars_between", 0),
     }
 
 
@@ -134,16 +182,22 @@ async def _push_alert(payload: dict[str, Any]) -> None:
     await manager.broadcast(payload)
 
 
-async def _process_symbol(exchange: ccxt.Exchange, symbol: str) -> None:
+# ---------------------------------------------------------------------------
+# Process a single symbol
+# ---------------------------------------------------------------------------
+
+async def _process_symbol(
+    exchange: ccxt.Exchange,
+    symbol: str,
+    timeframe: str,
+    history_limit: int,
+    min_bars: int,
+) -> None:
     candles = await asyncio.to_thread(
-        _fetch_closed_ohlcv,
-        exchange,
-        symbol,
-        TIMEFRAME,
-        HISTORY_LIMIT,
+        _fetch_closed_ohlcv, exchange, symbol, timeframe, history_limit,
     )
     if len(candles) < EMA_LENGTH:
-        market_status[symbol] = {
+        market_status[f"{symbol}|{timeframe}"] = {
             "state": "warming",
             "message": f"Only {len(candles)} closed candles available.",
             "updatedAt": _iso_now(),
@@ -152,94 +206,135 @@ async def _process_symbol(exchange: ccxt.Exchange, symbol: str) -> None:
 
     df = calculate_indicators(_candles_to_frame(candles))
     latest_closed = int(df.index[-1].timestamp() * 1000)
-    previous_closed = last_closed_timestamp.get(symbol)
+    cache_key = f"{symbol}|{timeframe}"
+    previous_closed = last_closed_timestamp.get(cache_key)
 
-    market_status[symbol] = {
+    market_status[cache_key] = {
         "state": "online",
-        "timeframe": TIMEFRAME,
+        "timeframe": timeframe,
         "historyCandles": len(df),
         "lastClosedCandle": df.index[-1].isoformat(),
         "updatedAt": _iso_now(),
     }
 
     if previous_closed is None:
-        last_closed_timestamp[symbol] = latest_closed
+        last_closed_timestamp[cache_key] = latest_closed
         if not STARTUP_SCAN:
             return
         scan_start = max(EMA_LENGTH, len(df) - 250)
     else:
         scan_start = next(
-            (idx for idx, timestamp in enumerate(df.index) if int(timestamp.timestamp() * 1000) > previous_closed),
+            (idx for idx, ts in enumerate(df.index) if int(ts.timestamp() * 1000) > previous_closed),
             len(df),
         )
 
+    cache_key = f"{symbol}|{timeframe}"
+    if cache_key not in consumed_points:
+        consumed_points[cache_key] = set()
+    consumed = consumed_points[cache_key]
+
     for current_index in range(scan_start, len(df)):
-        result = detect_setup(df, current_index)
-        if not result["trigger"]:
-            continue
+        results = detect_sweeps(df, current_index, min_bars=min_bars, consumed=consumed)
+        for result in results:
+            alert_key = f"{symbol}|{timeframe}|{result['direction']}|{result['sweep_time']}|{result['liquidity_time']}"
+            if alert_key in seen_alert_keys:
+                continue
+            seen_alert_keys.add(alert_key)
+            await _push_alert(_alert_payload(symbol, timeframe, result))
 
-        alert_key = f"{symbol}|{result['sweep_time']}|{result['breakdown_time']}"
-        if alert_key in seen_alert_keys:
-            continue
-
-        seen_alert_keys.add(alert_key)
-        await _push_alert(_alert_payload(symbol, TIMEFRAME, result))
-
-    last_closed_timestamp[symbol] = latest_closed
+    last_closed_timestamp[cache_key] = latest_closed
 
 
-async def _fetch_top_usdt_pairs(exchange: ccxt.Exchange, limit: int = 50) -> list[str]:
+# ---------------------------------------------------------------------------
+# Fetch top USDT pairs by volume
+# ---------------------------------------------------------------------------
+
+async def _fetch_top_usdt_pairs(exchange: ccxt.Exchange, limit: int = 200) -> list[str]:
     tickers = await asyncio.to_thread(exchange.fetch_tickers)
     pairs = []
     for sym, ticker in tickers.items():
-        if sym.endswith(':USDT') and ticker.get('quoteVolume') is not None:
-            pairs.append((sym, ticker['quoteVolume']))
+        if sym.endswith(":USDT") and ticker.get("quoteVolume") is not None:
+            pairs.append((sym, ticker["quoteVolume"]))
     pairs.sort(key=lambda x: x[1], reverse=True)
     return [p[0] for p in pairs[:limit]]
 
 
+# ---------------------------------------------------------------------------
+# Monitor loops
+# ---------------------------------------------------------------------------
+
+async def _loop_daily(exchange: ccxt.Exchange) -> None:
+    """Scan top-200 USDT pairs on 1D timeframe, min 10 bars."""
+    global daily_symbols
+    try:
+        daily_symbols = await _fetch_top_usdt_pairs(exchange, limit=DAILY_TOP_LIMIT)
+    except Exception as exc:
+        market_status["DAILY_SYSTEM"] = {"state": "error", "message": f"Failed to fetch daily pairs: {exc}", "updatedAt": _iso_now()}
+        return
+
+    while True:
+        for symbol in daily_symbols:
+            try:
+                await _process_symbol(exchange, symbol, "1d", HISTORY_LIMIT_1D, MIN_BARS_1D)
+            except Exception as exc:
+                market_status[f"{symbol}|1d"] = {
+                    "state": "error", "message": str(exc), "updatedAt": _iso_now(),
+                }
+            await asyncio.sleep(max(exchange.rateLimit / 1000, 0.3))
+        await manager.broadcast({"type": "status", "status": market_status})
+        await asyncio.sleep(POLL_SECONDS)
+
+
+async def _loop_hourly(exchange: ccxt.Exchange) -> None:
+    """Scan belge.txt watchlist on 1H timeframe, min 15 bars."""
+    while True:
+        for symbol in HOURLY_SYMBOLS:
+            try:
+                await _process_symbol(exchange, symbol, "1h", HISTORY_LIMIT_1H, MIN_BARS_1H)
+            except Exception as exc:
+                market_status[f"{symbol}|1h"] = {
+                    "state": "error", "message": str(exc), "updatedAt": _iso_now(),
+                }
+            await asyncio.sleep(max(exchange.rateLimit / 1000, 0.3))
+        await manager.broadcast({"type": "status", "status": market_status})
+        await asyncio.sleep(POLL_SECONDS)
+
+
 async def monitor_markets() -> None:
     exchange = ccxt.kucoinfutures({"enableRateLimit": True})
-    global SYMBOLS
     try:
-        if not SYMBOLS:
-            SYMBOLS = await _fetch_top_usdt_pairs(exchange, limit=200)
-            
-        while True:
-            for symbol in SYMBOLS:
-                try:
-                    await _process_symbol(exchange, symbol)
-                except Exception as exc:
-                    market_status[symbol] = {
-                        "state": "error",
-                        "message": str(exc),
-                        "updatedAt": _iso_now(),
-                    }
-                await asyncio.sleep(max(exchange.rateLimit / 1000, 0.2))
-            await manager.broadcast({"type": "status", "status": market_status})
-            await asyncio.sleep(POLL_SECONDS)
+        await asyncio.gather(
+            _loop_daily(exchange),
+            _loop_hourly(exchange),
+        )
     except Exception as exc:
-        market_status["SYSTEM"] = {"state": "error", "message": f"Fatal monitor error: {str(exc)}", "updatedAt": _iso_now()}
+        market_status["SYSTEM"] = {
+            "state": "error",
+            "message": f"Fatal monitor error: {str(exc)}",
+            "updatedAt": _iso_now(),
+        }
         await manager.broadcast({"type": "status", "status": market_status})
     finally:
         with suppress(Exception):
             exchange.close()
 
 
+# ---------------------------------------------------------------------------
+# FastAPI app
+# ---------------------------------------------------------------------------
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global monitor_task
-    monitor_task = asyncio.create_task(monitor_markets())
+    task = asyncio.create_task(monitor_markets())
     try:
         yield
     finally:
-        if monitor_task:
-            monitor_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await monitor_task
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
 
 
-app = FastAPI(title="Trading Alert Engine", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Trading Alert Engine", version="0.2.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -253,8 +348,8 @@ app.add_middleware(
 async def health() -> dict[str, Any]:
     return {
         "ok": True,
-        "symbols": SYMBOLS,
-        "timeframe": TIMEFRAME,
+        "hourlySymbols": HOURLY_SYMBOLS,
+        "dailySymbolCount": len(daily_symbols),
         "pollSeconds": POLL_SECONDS,
     }
 
@@ -274,21 +369,21 @@ async def debug_test_alert() -> dict[str, Any]:
     if not DEBUG_ALERTS:
         return {"sent": False, "reason": "DEBUG_ALERTS is disabled."}
 
-    symbol = SYMBOLS[0] if SYMBOLS else "NEIRO/USDT:USDT"
+    symbol = HOURLY_SYMBOLS[0] if HOURLY_SYMBOLS else "BTC/USDT:USDT"
     payload = {
         "id": str(uuid.uuid4()),
         "type": "alert",
         "symbol": symbol,
-        "timeframe": TIMEFRAME,
+        "timeframe": "1h",
+        "direction": "LONG",
         "createdAt": _iso_now(),
         "sweepTime": _iso_now(),
-        "breakdownTime": _iso_now(),
         "liquidityTime": _iso_now(),
-        "swingLowTime": _iso_now(),
-        "liquidityLevel": 0.00008091,
-        "breakdownLevel": 0.00007702,
-        "sweepHigh": 0.00008159,
-        "breakdownClose": 0.00007332,
+        "liquidityLevel": 60000.0,
+        "closePrice": 61234.56,
+        "sweepExtreme": 59800.0,
+        "emaAligned": True,
+        "barsBetween": 22,
         "debug": True,
     }
     await _push_alert(payload)
@@ -303,8 +398,8 @@ async def websocket_alerts(websocket: WebSocket) -> None:
             "type": "snapshot",
             "alerts": alerts[-50:],
             "status": market_status,
-            "symbols": SYMBOLS,
-            "timeframe": TIMEFRAME,
+            "hourlySymbols": HOURLY_SYMBOLS,
+            "dailySymbolCount": len(daily_symbols),
         }
     )
     try:
